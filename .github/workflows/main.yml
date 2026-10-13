@@ -10,36 +10,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create export snapshot and download
+      - name: Download Label Studio Task
         env:
-          LS_TOKEN: ${{ secrets.LABEL_STUDIO_TOKEN }}
+          LS_PAT: ${{ secrets.LABEL_STUDIO_TOKEN }}
           LS_HOST: "https://app.humansignal.com"
           PROJECT_ID: "269952"
           TASK_ID: "274190269"
         run: |
           set -e
 
-          echo "创建导出任务..."
+          echo "===== 步骤 1: 用 Personal Access Token 换取 access token ====="
+          TOKEN_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            curl --noproxy "*" -sS -L -X POST \
+            "$LS_HOST/api/token/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"refresh\": \"$LS_PAT\"}")
+
+          echo "Token 响应: $TOKEN_RESPONSE"
+
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access // empty' 2>/dev/null || echo "")
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "获取 access token 失败。"
+            exit 1
+          fi
+          echo "成功获取 access token，长度: ${#ACCESS_TOKEN}"
+
+          echo "===== 步骤 2: 创建导出任务 ====="
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
-          RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+          RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
             curl --noproxy "*" -sS -L -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
-            -H "Authorization: Token $LS_TOKEN" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
             -d "$BODY")
 
           echo "创建响应: $RESPONSE"
 
-          # 尝试提取 export_pk 或 id
-          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.export_pk // .id // empty' 2>/dev/null || echo "")
-          if [ -z "$EXPORT_ID" ]; then
-            echo "无法提取导出 ID，响应: $RESPONSE"
+          # 检查是否返回 401
+          if echo "$RESPONSE" | grep -q "Invalid token"; then
+            echo "Token 仍然无效，请检查 Secret 是否是正确的 Personal Access Token。"
             exit 1
           fi
-          echo "使用导出 ID: $EXPORT_ID"
 
-          echo "轮询导出状态..."
+          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // .export_pk // empty' 2>/dev/null || echo "")
+          if [ -z "$EXPORT_ID" ]; then
+            echo "无法提取导出 ID。"
+            exit 1
+          fi
+          echo "导出任务 ID: $EXPORT_ID"
+
+          echo "===== 步骤 3: 轮询导出状态 ====="
           MAX_ATTEMPTS=30
           ATTEMPT=0
           STATUS="created"
@@ -48,20 +69,17 @@ jobs:
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
 
-            # 关键修改：加上尾斜杠
-            STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+            STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
               curl --noproxy "*" -sS -L -X GET \
               "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/" \
-              -H "Authorization: Token $LS_TOKEN" \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
               -H "Accept: application/json")
-
-            echo "DEBUG: 轮询原始响应: $STATUS_RESPONSE"
 
             STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
             echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 状态: $STATUS"
 
             if [ "$STATUS" = "failed" ]; then
-              echo "导出失败。"
+              echo "导出失败: $STATUS_RESPONSE"
               exit 1
             fi
           done
@@ -71,14 +89,16 @@ jobs:
             exit 1
           fi
 
-          echo "下载导出文件..."
-          env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+          echo "===== 步骤 4: 下载导出文件 ====="
+          env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
             curl --noproxy "*" -sS -L -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
-            -H "Authorization: Token $LS_TOKEN" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
             --output task_export.json
 
           echo "下载完成，文件大小: $(wc -c < task_export.json) bytes"
+          head -c 200 task_export.json
+          echo ""
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
