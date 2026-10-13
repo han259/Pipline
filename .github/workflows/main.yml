@@ -26,11 +26,9 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"refresh\": \"$LS_PAT\"}")
 
-          echo "Token 响应: $TOKEN_RESPONSE"
-
           ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access // empty' 2>/dev/null || echo "")
           if [ -z "$ACCESS_TOKEN" ]; then
-            echo "获取 access token 失败。"
+            echo "获取 access token 失败。响应: $TOKEN_RESPONSE"
             exit 1
           fi
           echo "成功获取 access token，长度: ${#ACCESS_TOKEN}"
@@ -46,12 +44,6 @@ jobs:
             -d "$BODY")
 
           echo "创建响应: $RESPONSE"
-
-          # 检查是否返回 401
-          if echo "$RESPONSE" | grep -q "Invalid token"; then
-            echo "Token 仍然无效，请检查 Secret 是否是正确的 Personal Access Token。"
-            exit 1
-          fi
 
           EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // .export_pk // empty' 2>/dev/null || echo "")
           if [ -z "$EXPORT_ID" ]; then
@@ -69,23 +61,27 @@ jobs:
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
 
+            # 使用正确接口获取导出快照状态
             STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
               curl --noproxy "*" -sS -L -X GET \
-              "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/" \
+              "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
               -H "Authorization: Bearer $ACCESS_TOKEN" \
               -H "Accept: application/json")
 
-            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+            echo "DEBUG: 轮询原始响应: $STATUS_RESPONSE"
+
+            # 尝试从顶层或 data 字段中提取 status
+            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // .data.status // "unknown"' 2>/dev/null || echo "unknown")
             echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 状态: $STATUS"
 
             if [ "$STATUS" = "failed" ]; then
-              echo "导出失败: $STATUS_RESPONSE"
+              echo "导出失败。响应: $STATUS_RESPONSE"
               exit 1
             fi
           done
 
           if [ "$STATUS" != "completed" ]; then
-            echo "导出超时。"
+            echo "导出超时或状态未知。最后一次响应: $STATUS_RESPONSE"
             exit 1
           fi
 
