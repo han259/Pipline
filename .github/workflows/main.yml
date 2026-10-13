@@ -20,33 +20,23 @@ jobs:
           set -e
 
           echo "===== 网络诊断信息 ====="
-          echo "1. 环境变量代理检查:"
           env | grep -i proxy || echo "  未发现代理环境变量"
-
-          echo "2. 系统级代理配置检查:"
-          cat ~/.curlrc 2>/dev/null || echo "  未找到 ~/.curlrc 文件"
-
-          echo "3. 直接连接测试 (绕过代理):"
-          curl --noproxy "*" -sS -o /dev/null -w "  连接状态码: %{http_code}\n" https://app.humansignal.com || echo "  连接失败"
-
-          echo "4. DNS 解析测试:"
-          nslookup app.humansignal.com 2>&1 | head -5 || echo "  DNS 解析失败"
           echo "=========================="
 
           echo "创建导出任务..."
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
 
-          # 核心修复: 使用 env -u 强制清除所有代理变量
           RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-            curl --noproxy "*" -sS -X POST \
+            curl --noproxy "*" -sS -L -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
             -H "Authorization: Token $LS_TOKEN" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
             -d "$BODY")
 
-          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
           if [ -z "$EXPORT_ID" ]; then
-            echo "创建导出任务失败。响应: $RESPONSE"
+            echo "创建导出任务失败。原始响应: $RESPONSE"
             exit 1
           fi
           echo "导出任务已创建，ID: $EXPORT_ID"
@@ -61,12 +51,17 @@ jobs:
             ATTEMPT=$((ATTEMPT + 1))
 
             STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-              curl --noproxy "*" -sS -X GET \
+              curl --noproxy "*" -sS -L -X GET \
               "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
-              -H "Authorization: Token $LS_TOKEN")
+              -H "Authorization: Token $LS_TOKEN" \
+              -H "Accept: application/json")
 
-            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"')
-            echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 状态: $STATUS"
+            # 关键调试：打印服务器返回的原始内容
+            echo "DEBUG: 轮询原始响应: $STATUS_RESPONSE"
+
+            # 容错解析：如果 jq 失败，默认状态为 unknown，避免脚本崩溃
+            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+            echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 解析状态: $STATUS"
 
             if [ "$STATUS" = "failed" ]; then
               echo "导出失败。响应: $STATUS_RESPONSE"
@@ -82,7 +77,7 @@ jobs:
 
           echo "正在下载导出文件..."
           env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-            curl --noproxy "*" -sS -X GET \
+            curl --noproxy "*" -sS -L -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
