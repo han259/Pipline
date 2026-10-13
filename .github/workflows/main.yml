@@ -19,13 +19,8 @@ jobs:
         run: |
           set -e
 
-          echo "===== 网络诊断信息 ====="
-          env | grep -i proxy || echo "  未发现代理环境变量"
-          echo "=========================="
-
           echo "创建导出任务..."
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
-
           RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
             curl --noproxy "*" -sS -L -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
@@ -34,15 +29,18 @@ jobs:
             -H "Accept: application/json" \
             -d "$BODY")
 
-          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
+          echo "创建响应: $RESPONSE"
+
+          # 尝试提取 export_pk 或 id
+          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.export_pk // .id // empty' 2>/dev/null || echo "")
           if [ -z "$EXPORT_ID" ]; then
-            echo "创建导出任务失败。原始响应: $RESPONSE"
+            echo "无法提取导出 ID，响应: $RESPONSE"
             exit 1
           fi
-          echo "导出任务已创建，ID: $EXPORT_ID"
+          echo "使用导出 ID: $EXPORT_ID"
 
           echo "轮询导出状态..."
-          MAX_ATTEMPTS=60
+          MAX_ATTEMPTS=30
           ATTEMPT=0
           STATUS="created"
 
@@ -50,41 +48,37 @@ jobs:
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
 
+            # 关键修改：加上尾斜杠
             STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
               curl --noproxy "*" -sS -L -X GET \
-              "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
+              "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/" \
               -H "Authorization: Token $LS_TOKEN" \
               -H "Accept: application/json")
 
-            # 关键调试：打印服务器返回的原始内容
             echo "DEBUG: 轮询原始响应: $STATUS_RESPONSE"
 
-            # 容错解析：如果 jq 失败，默认状态为 unknown，避免脚本崩溃
             STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
-            echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 解析状态: $STATUS"
+            echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 状态: $STATUS"
 
             if [ "$STATUS" = "failed" ]; then
-              echo "导出失败。响应: $STATUS_RESPONSE"
+              echo "导出失败。"
               exit 1
             fi
           done
 
           if [ "$STATUS" != "completed" ]; then
-            echo "导出超时 (已尝试 $MAX_ATTEMPTS 次)"
+            echo "导出超时。"
             exit 1
           fi
-          echo "导出成功完成!"
 
-          echo "正在下载导出文件..."
+          echo "下载导出文件..."
           env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
             curl --noproxy "*" -sS -L -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
 
-          echo "文件大小: $(wc -c < task_export.json) bytes"
-          head -c 200 task_export.json
-          echo ""
+          echo "下载完成，文件大小: $(wc -c < task_export.json) bytes"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
