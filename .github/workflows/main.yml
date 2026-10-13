@@ -16,14 +16,13 @@ jobs:
           LS_HOST: "https://app.humansignal.com"
           PROJECT_ID: "269952"
           TASK_ID: "274190269"
-          http_proxy: ""
-          https_proxy: ""
         run: |
           set -e
 
           echo "Creating export snapshot for project $PROJECT_ID, task $TASK_ID..."
+          # 核心修改：添加 --noproxy "*" 参数
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
-          RESPONSE=$(curl -sS -X POST \
+          RESPONSE=$(curl --noproxy "*" -sS -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
             -H "Authorization: Token $LS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -44,7 +43,8 @@ jobs:
           while [ "$STATUS" != "completed" ] && [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
-            STATUS_RESPONSE=$(curl -sS -X GET \
+            # 核心修改：添加 --noproxy "*" 参数
+            STATUS_RESPONSE=$(curl --noproxy "*" -sS -X GET \
               "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
               -H "Authorization: Token $LS_TOKEN")
             STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"')
@@ -63,7 +63,8 @@ jobs:
           echo "Export completed successfully!"
 
           echo "Downloading export file..."
-          curl -sS -X GET \
+          # 核心修改：添加 --noproxy "*" 参数
+          curl --noproxy "*" -sS -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
