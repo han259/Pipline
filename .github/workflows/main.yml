@@ -19,16 +19,26 @@ jobs:
         run: |
           set -e
 
-          echo "===== Proxy environment variables ====="
-          env | grep -i proxy || true
-          echo "======================================="
+          echo "===== 网络诊断信息 ====="
+          echo "1. 环境变量代理检查:"
+          env | grep -i proxy || echo "  未发现代理环境变量"
 
-          # 额外保险：主动清除可能存在的代理变量
-          unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY || true
+          echo "2. 系统级代理配置检查:"
+          cat ~/.curlrc 2>/dev/null || echo "  未找到 ~/.curlrc 文件"
 
-          echo "Creating export snapshot for project $PROJECT_ID, task $TASK_ID..."
+          echo "3. 直接连接测试 (绕过代理):"
+          curl --noproxy "*" -sS -o /dev/null -w "  连接状态码: %{http_code}\n" https://app.humansignal.com || echo "  连接失败"
+
+          echo "4. DNS 解析测试:"
+          nslookup app.humansignal.com 2>&1 | head -5 || echo "  DNS 解析失败"
+          echo "=========================="
+
+          echo "创建导出任务..."
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
-          RESPONSE=$(curl --noproxy "*" -sS -X POST \
+
+          # 核心修复: 使用 env -u 强制清除所有代理变量
+          RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+            curl --noproxy "*" -sS -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
             -H "Authorization: Token $LS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -36,12 +46,12 @@ jobs:
 
           EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
           if [ -z "$EXPORT_ID" ]; then
-            echo "Failed to create export. Response: $RESPONSE"
+            echo "创建导出任务失败。响应: $RESPONSE"
             exit 1
           fi
-          echo "Export created with ID: $EXPORT_ID"
+          echo "导出任务已创建，ID: $EXPORT_ID"
 
-          echo "Polling export status..."
+          echo "轮询导出状态..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
           STATUS="created"
@@ -49,31 +59,35 @@ jobs:
           while [ "$STATUS" != "completed" ] && [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
-            STATUS_RESPONSE=$(curl --noproxy "*" -sS -X GET \
+
+            STATUS_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+              curl --noproxy "*" -sS -X GET \
               "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
               -H "Authorization: Token $LS_TOKEN")
+
             STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"')
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - Status: $STATUS"
+            echo "第 $ATTEMPT/$MAX_ATTEMPTS 次 - 状态: $STATUS"
 
             if [ "$STATUS" = "failed" ]; then
-              echo "Export failed. Response: $STATUS_RESPONSE"
+              echo "导出失败。响应: $STATUS_RESPONSE"
               exit 1
             fi
           done
 
           if [ "$STATUS" != "completed" ]; then
-            echo "Export timed out after $MAX_ATTEMPTS attempts."
+            echo "导出超时 (已尝试 $MAX_ATTEMPTS 次)"
             exit 1
           fi
-          echo "Export completed successfully!"
+          echo "导出成功完成!"
 
-          echo "Downloading export file..."
-          curl --noproxy "*" -sS -X GET \
+          echo "正在下载导出文件..."
+          env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+            curl --noproxy "*" -sS -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
 
-          echo "File size: $(wc -c < task_export.json) bytes"
+          echo "文件大小: $(wc -c < task_export.json) bytes"
           head -c 200 task_export.json
           echo ""
 
