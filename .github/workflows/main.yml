@@ -19,8 +19,14 @@ jobs:
         run: |
           set -e
 
+          echo "===== Proxy environment variables ====="
+          env | grep -i proxy || true
+          echo "======================================="
+
+          # 额外保险：主动清除可能存在的代理变量
+          unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY || true
+
           echo "Creating export snapshot for project $PROJECT_ID, task $TASK_ID..."
-          # 核心修改：添加 --noproxy "*" 参数
           BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
           RESPONSE=$(curl --noproxy "*" -sS -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
@@ -43,7 +49,6 @@ jobs:
           while [ "$STATUS" != "completed" ] && [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             sleep 5
             ATTEMPT=$((ATTEMPT + 1))
-            # 核心修改：添加 --noproxy "*" 参数
             STATUS_RESPONSE=$(curl --noproxy "*" -sS -X GET \
               "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
               -H "Authorization: Token $LS_TOKEN")
@@ -63,7 +68,6 @@ jobs:
           echo "Export completed successfully!"
 
           echo "Downloading export file..."
-          # 核心修改：添加 --noproxy "*" 参数
           curl --noproxy "*" -sS -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
