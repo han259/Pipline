@@ -1,7 +1,7 @@
-name: Download Label Studio Task
+name: Download Label Studio Task (Async)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   download:
@@ -10,25 +10,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Exchange PAT for access token
-        id: get-token
+      - name: Create export snapshot and download
         env:
-          PAT: ${{ secrets.LABEL_STUDIO_TOKEN }}
+          LS_TOKEN: ${{ secrets.LABEL_STUDIO_TOKEN }}
+          LS_HOST: "https://app.humansignal.com"
+          PROJECT_ID: "269952"
         run: |
-          ACCESS_TOKEN=$(curl -sS -X POST \
-            "https://app.humansignal.com/api/token/refresh" \
-            -H "Content-Type: application/json" \
-            -d "{\"refresh\": \"$PAT\"}" \
-            | jq -r '.access')
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
-          echo "Token obtained, length: ${#ACCESS_TOKEN}"
+          set -e  # 任何命令失败立即终止
 
-      - name: Download task JSON
-        run: |
+          # 1. 创建导出快照
+          echo "Creating export snapshot for project $PROJECT_ID..."
+          RESPONSE=$(curl -sS -X POST \
+            "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
+            -H "Authorization: Token $LS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"exportType": "JSON"}')
+
+          EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+          if [ -z "$EXPORT_ID" ]; then
+            echo "Failed to create export. Response: $RESPONSE"
+            exit 1
+          fi
+          echo "Export created with ID: $EXPORT_ID"
+
+          # 2. 轮询任务状态（最多等待 5 分钟）
+          echo "Polling export status..."
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          STATUS="created"
+
+          while [ "$STATUS" != "completed" ] && [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            sleep 5
+            ATTEMPT=$((ATTEMPT + 1))
+            STATUS_RESPONSE=$(curl -sS -X GET \
+              "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID" \
+              -H "Authorization: Token $LS_TOKEN")
+            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"')
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - Status: $STATUS"
+
+            if [ "$STATUS" = "failed" ]; then
+              echo "Export failed. Response: $STATUS_RESPONSE"
+              exit 1
+            fi
+          done
+
+          if [ "$STATUS" != "completed" ]; then
+            echo "Export timed out after $MAX_ATTEMPTS attempts."
+            exit 1
+          fi
+          echo "Export completed successfully!"
+
+          # 3. 下载导出文件
+          echo "Downloading export file..."
           curl -sS -X GET \
-            "https://app.humansignal.com/api/projects/269952/export?ids[]=274190269&exportType=JSON" \
-            -H "Authorization: Bearer ${{ steps.get-token.outputs.ACCESS_TOKEN }}" \
+            "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
+            -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
+
+          # 验证下载内容
+          echo "File size: $(wc -c < task_export.json) bytes"
           head -c 200 task_export.json
           echo ""
 
