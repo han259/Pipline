@@ -1,7 +1,7 @@
 name: Download Label Studio Task (Async)
 
 on:
-  workflow_dispatch:  # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   download:
@@ -15,10 +15,13 @@ jobs:
           LS_TOKEN: ${{ secrets.LABEL_STUDIO_TOKEN }}
           LS_HOST: "https://app.humansignal.com"
           PROJECT_ID: "269952"
+          http_proxy: ""
+          https_proxy: ""
+          HTTP_PROXY: ""
+          HTTPS_PROXY: ""
         run: |
-          set -e  # 任何命令失败立即终止
+          set -e
 
-          # 1. 创建导出快照
           echo "Creating export snapshot for project $PROJECT_ID..."
           RESPONSE=$(curl -sS -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
@@ -33,7 +36,6 @@ jobs:
           fi
           echo "Export created with ID: $EXPORT_ID"
 
-          # 2. 轮询任务状态（最多等待 5 分钟）
           echo "Polling export status..."
           MAX_ATTEMPTS=60
           ATTEMPT=0
@@ -60,14 +62,12 @@ jobs:
           fi
           echo "Export completed successfully!"
 
-          # 3. 下载导出文件
           echo "Downloading export file..."
           curl -sS -X GET \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/$EXPORT_ID/download" \
             -H "Authorization: Token $LS_TOKEN" \
             --output task_export.json
 
-          # 验证下载内容
           echo "File size: $(wc -c < task_export.json) bytes"
           head -c 200 task_export.json
           echo ""
