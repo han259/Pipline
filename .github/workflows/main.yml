@@ -1,7 +1,7 @@
 name: Download Label Studio Task
 
 on:
-  workflow_dispatch:  # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   download:
@@ -10,13 +10,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download task JSON
+      - name: Exchange PAT for access token
+        id: get-token
         env:
-          LS_TOKEN: ${{ secrets.LABEL_STUDIO_TOKEN }}
+          PAT: ${{ secrets.LABEL_STUDIO_TOKEN }}
         run: |
-          curl -X GET "https://app.humansignal.com/api/projects/269952/export?ids[]=274190269&exportType=JSON" \
-            -H "Authorization: Token $LS_TOKEN" \
+          ACCESS_TOKEN=$(curl -sS -X POST \
+            "https://app.humansignal.com/api/token/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"refresh\": \"$PAT\"}" \
+            | jq -r '.access')
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
+          echo "Token obtained, length: ${#ACCESS_TOKEN}"
+
+      - name: Download task JSON
+        run: |
+          curl -sS -X GET \
+            "https://app.humansignal.com/api/projects/269952/export?ids[]=274190269&exportType=JSON" \
+            -H "Authorization: Bearer ${{ steps.get-token.outputs.ACCESS_TOKEN }}" \
             --output task_export.json
+          head -c 200 task_export.json
+          echo ""
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
