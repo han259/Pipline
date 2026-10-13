@@ -15,19 +15,19 @@ jobs:
           LS_TOKEN: ${{ secrets.LABEL_STUDIO_TOKEN }}
           LS_HOST: "https://app.humansignal.com"
           PROJECT_ID: "269952"
+          TASK_ID: "274190269"
           http_proxy: ""
           https_proxy: ""
-          HTTP_PROXY: ""
-          HTTPS_PROXY: ""
         run: |
           set -e
 
-          echo "Creating export snapshot for project $PROJECT_ID..."
+          echo "Creating export snapshot for project $PROJECT_ID, task $TASK_ID..."
+          BODY="{\"exportType\": \"JSON\", \"task_filter_options\": {\"ids\": [$TASK_ID]}}"
           RESPONSE=$(curl -sS -X POST \
             "$LS_HOST/api/projects/$PROJECT_ID/exports/" \
             -H "Authorization: Token $LS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"exportType": "JSON"}')
+            -d "$BODY")
 
           EXPORT_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
           if [ -z "$EXPORT_ID" ]; then
