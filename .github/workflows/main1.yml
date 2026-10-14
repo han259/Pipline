@@ -1,0 +1,53 @@
+name: Get Label Studio Task Details
+
+on:
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  get-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch Task Data
+        env:
+          LS_PAT: ${{ secrets.LABEL_STUDIO_TOKEN }}
+          LS_HOST: "https://app.humansignal.com"
+          TASK_ID: "274190269" # 替换为你实际要查询的 task id
+        run: |
+          set -e
+
+          echo "===== 步骤 1: 用 Personal Access Token 换取 access token ====="
+          TOKEN_RESPONSE=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            curl --noproxy "*" -sS -L -X POST \
+            "$LS_HOST/api/token/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"refresh\": \"$LS_PAT\"}")
+
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access // empty' 2>/dev/null || echo "")
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "获取 access token 失败。响应: $TOKEN_RESPONSE"
+            exit 1
+          fi
+
+          echo "===== 步骤 2: 获取 Task 详情 ====="
+          # 根据 API 文档，URL 为 /api/tasks/:id/
+          env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            curl --noproxy "*" -sS -L -X GET \
+            "$LS_HOST/api/tasks/$TASK_ID/" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Accept: application/json" \
+            --output task_detail.json
+
+          echo "===== 步骤 3: 查看获取结果 ====="
+          echo "文件大小: $(wc -c < task_detail.json) bytes"
+          echo "返回内容预览 (前 500 字符):"
+          head -c 500 task_detail.json
+          echo ""
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: label-studio-task-detail
+          path: task_detail.json
